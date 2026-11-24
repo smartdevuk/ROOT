@@ -4,7 +4,7 @@
 
 ROOT is a native file explorer for the Linux environment on a Chromebook. Independent windows share a clipboard and a transfer queue. Its dark violet interface, mint throughput trace and four-row scrolling activity view come from [PORT22](https://github.com/smartdevuk/PORT22).
 
-**[Download ROOT 1.4.0 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.4.0_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
+**[Download ROOT 1.4.1 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.4.1_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
 
 ![ROOT file explorer](docs/explorer.png)
 
@@ -18,7 +18,7 @@ ROOT is a native file explorer for the Linux environment on a Chromebook. Indepe
 
 ~~~sh
 sudo apt update
-sudo apt install ~/root-explorer_1.4.0_all.deb
+sudo apt install ~/root-explorer_1.4.1_all.deb
 ~~~
 
 The Debian package uses the system Python, Qt 5, GVfs SMB, GTK 3, VTE and OpenSSH. Its package name and terminal command are both **root-explorer**. The code is architecture-independent and targets Debian 12 and 13. ROOT runs as your normal Linux user.
@@ -118,7 +118,7 @@ The screenshots show the native app with temporary sample files. The transfer ca
 sudo apt install python3-pyqt5 python3-gi python3-gi-cairo gir1.2-secret-1 gnome-keyring gir1.2-glib-2.0 gvfs-backends gvfs-fuse xdg-utils gir1.2-gtk-3.0 gir1.2-vte-2.91 openssh-client python3-libarchive-c sudo dpkg-dev
 /usr/bin/python3 root_explorer/main.py
 ./build.sh
-sudo apt install ./dist/root-explorer_1.4.0_all.deb
+sudo apt install ./dist/root-explorer_1.4.1_all.deb
 ~~~
 
 To open a specific location from Terminal, run either command below.

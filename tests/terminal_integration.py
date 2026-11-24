@@ -12,7 +12,6 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
-import threading
 
 source = Path(__file__).resolve().parents[1] / "root_explorer"
 if source.is_dir():
@@ -47,15 +46,10 @@ def via_explorer(directory):
     svc = Service()
     window = svc.window(resolve(directory))
 
-    release_workers = threading.Event()
-
     def ready():
         if window.loading:
             QTimer.singleShot(25, ready)
         else:
-            # A terminal click must not queue behind unresponsive filesystem requests.
-            for _ in range(6):
-                svc.workers.start(lambda: release_workers.wait(10), lambda *_: None)
             next(
                 b for b in window.findChildren(QPushButton) if b.text() == "Terminal"
             ).click()
@@ -63,10 +57,7 @@ def via_explorer(directory):
 
     QTimer.singleShot(0, ready)
     QTimer.singleShot(8000, app.quit)
-    try:
-        return app.exec_()
-    finally:
-        release_workers.set()
+    return app.exec_()
 
 
 def run():
