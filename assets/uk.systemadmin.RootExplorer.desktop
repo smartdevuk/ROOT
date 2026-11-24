@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ROOT
+GenericName=File Explorer
+Comment=Browse Chromebook folders and SMB network shares
+Exec=root-explorer %u
+Icon=uk.systemadmin.RootExplorer
+Terminal=false
+Categories=System;FileTools;FileManager;
+Keywords=Files;Explorer;Network;SMB;NAS;
+StartupNotify=true
+StartupWMClass=ROOT
