@@ -67,7 +67,7 @@ def run():
 
         def enter_ip():
             d = app.activeModalWidget()
-            assert d.windowTitle() == "Connect to NAS"
+            assert d.windowTitle() == "Connection settings"
             path, ip = d.findChildren(QLineEdit)
             assert path.text() == display(friendly)
             ip.setText(test_ip)

@@ -3,7 +3,7 @@
 from functools import lru_cache
 from gi.repository import Gio
 from PyQt5 import sip
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -12,6 +12,8 @@ from PyQt5.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
     QTreeWidget,
     QTreeWidgetItem,
 )
@@ -95,12 +97,22 @@ class Breadcrumbs(QFrame):
 
     def fit(self):
         available = self.width() - self.edit_button.sizeHint().width() - 16
-        sizes = [
-            min(190, b.fontMetrics().horizontalAdvance(b.accessibleName()) + 20)
-            + s.sizeHint().width()
-            + 3
-            for _, b, s in self.items
-        ]
+        sizes = []
+        widths = []
+        for _, btn, sep in self.items:
+            btn.ensurePolished()
+            opt = QStyleOptionButton()
+            btn.initStyleOption(opt)
+            opt.rect = QRect(0, 0, 240, self.height())
+            content = btn.style().subElementRect(QStyle.SE_PushButtonContents, opt, btn)
+            inset = opt.rect.width() - content.width() + 8
+            fm = btn.fontMetrics()
+            name = btn.accessibleName()
+            natural = (
+                max(fm.horizontalAdvance(name), fm.boundingRect(name).width()) + inset
+            )
+            widths.append((natural, inset))
+            sizes.append(min(206, natural) + sep.sizeHint().width() + 3)
         start = 0
         total = sum(sizes)
         if total > available:
@@ -111,15 +123,14 @@ class Breadcrumbs(QFrame):
         self.more.setVisible(start > 0)
         for i, (file, btn, sep) in enumerate(self.items):
             name = btn.accessibleName()
-            width = min(
-                190, max(35, available), btn.fontMetrics().horizontalAdvance(name) + 20
-            )
+            natural, inset = widths[i]
+            width = min(natural, 206, max(35, available))
             btn.setFixedWidth(width)
-            btn.setText(
-                btn.fontMetrics()
-                .elidedText(name, Qt.ElideMiddle, width - 14)
-                .replace("&", "&&")
-            )
+            if width < natural:
+                name = btn.fontMetrics().elidedText(
+                    name, Qt.ElideMiddle, max(1, width - inset)
+                )
+            btn.setText(name.replace("&", "&&"))
             btn.setVisible(i >= start)
             sep.setVisible(i >= start and i > 0)
 

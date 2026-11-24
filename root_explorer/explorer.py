@@ -1,5 +1,6 @@
 """Native multi-window file browser for ChromeOS Linux."""
 
+import os
 from pathlib import Path
 
 from gi.repository import Gio
@@ -48,6 +49,7 @@ from files import (
     resolve,
     numeric_host,
     server,
+    share_root,
     translate_server,
 )
 import archives
@@ -66,6 +68,18 @@ from navigation import Breadcrumbs, DirectoryTree
 COPY_FORMAT = "x-special/gnome-copied-files"
 
 
+def clipboard_files(mime):
+    if not mime or mime.hasFormat(archives.MIME):
+        return False, []
+    if mime.hasFormat(COPY_FORMAT):
+        lines = bytes(mime.data(COPY_FORMAT)).decode(errors="replace").splitlines()
+        if lines and lines[0] in ("cut", "copy"):
+            return lines[0] == "cut", lines[1:]
+        return False, []
+    move = bytes(mime.data("application/x-kde-cutselection")) == b"1"
+    return move, [bytes(url.toEncoded()).decode() for url in mime.urls()]
+
+
 class Window(QMainWindow):
     def __init__(self, service, start=None):
         super().__init__()
@@ -79,6 +93,7 @@ class Window(QMainWindow):
         self.attempt = None
         self.suggested_ip = None
         self.failed_network = None
+        self.unavailable = False
         self.select_after_rename = None
         self.deferred_refresh = False
         self.suggest_serial = 0
@@ -116,7 +131,6 @@ class Window(QMainWindow):
         left.addSpacing(12)
         self.tree = DirectoryTree(self)
         left.addWidget(self.tree, 1)
-        left.addWidget(button("Connect to NAS", self.network, "server", "nav"))
         left.addWidget(
             button(
                 "SSH sessions", lambda: self.launch_terminal(["sessions"]), "key", "nav"
@@ -143,6 +157,11 @@ class Window(QMainWindow):
         )
         self.newwin.setToolTip("Open this location in a new window (Ctrl+N)")
         header.addWidget(button("Terminal", self.open_terminal, "terminal"))
+        root_terminal = button(
+            "Root terminal", lambda: self.open_terminal(admin=True), "terminal"
+        )
+        root_terminal.setToolTip("Open an administrator shell using sudo")
+        header.addWidget(root_terminal)
         header.addWidget(self.newwin)
         header.addWidget(button("New folder", self.new_folder, "plus", "primary"))
         main.addLayout(header)
@@ -206,6 +225,8 @@ class Window(QMainWindow):
         tools.addWidget(self.more)
         content.addLayout(tools)
         self.table = FileTable()
+        QApplication.clipboard().dataChanged.connect(self.sync_cut)
+        self.sync_cut()
         self.apply_thumbnails()
         self.svc.changed.connect(self.apply_thumbnails)
         self.table.files.rename_requested.connect(self.rename_entry)
@@ -573,6 +594,7 @@ class Window(QMainWindow):
                         selected = {target.get_uri()}
                     self.select_after_rename = None
                 self.loading = False
+                self.unavailable = False
                 self.current = file
                 self.location = location
                 self.attempt = None
@@ -644,6 +666,7 @@ class Window(QMainWindow):
             self.status()
             self.attempt = None
             detail = getattr(err, "message", str(err)).rstrip(".")
+            self.unavailable = True
             self.failed_network = location if not location.is_native() else None
             self.fix_network.setVisible(self.failed_network is not None)
             self.address.setText(display(location))
@@ -812,7 +835,7 @@ class Window(QMainWindow):
     def network(self):
         initial = self.failed_network or self.attempt or self.location
         dlg = QDialog(self)
-        dlg.setWindowTitle("Connect to NAS")
+        dlg.setWindowTitle("Connection settings")
         lay = QFormLayout(dlg)
         path = QLineEdit(display(initial) if not initial.is_native() else "\\\\")
         path.setPlaceholderText(r"\\fileserver\Shared")
@@ -841,6 +864,9 @@ class Window(QMainWindow):
                 raw = "\\\\" + raw
             return resolve(raw)
 
+        reset = buttons.addButton(
+            "Forget login and reconnect…", QDialogButtonBox.ActionRole
+        )
         last_host = [None]
 
         def populate(*_):
@@ -848,6 +874,7 @@ class Window(QMainWindow):
                 host = server(parse())
             except ValueError:
                 host = ""
+            reset.setEnabled(bool(host))
             if last_host[0] != host:
                 guess = (
                     self.suggested_ip[1]
@@ -859,7 +886,7 @@ class Window(QMainWindow):
                 )
                 last_host[0] = host
 
-        def accept():
+        def accept(forget=False):
             try:
                 target = parse()
                 override = numeric_host(address.text().strip())
@@ -872,14 +899,65 @@ class Window(QMainWindow):
                 error.show()
                 return
             dlg.accept()
-            self.go(target, override=override)
+            if forget:
+                self.change_login(target, override)
+            else:
+                self.go(target, override=override)
 
+        reset.clicked.connect(lambda: accept(True))
         path.textChanged.connect(populate)
         populate()
         buttons.accepted.connect(accept)
         buttons.rejected.connect(dlg.reject)
         dlg.exec_()
         dlg.deleteLater()
+
+    def change_login(self, target, override=None):
+        endpoint = self.svc.endpoint(target, override)
+        if not server(endpoint):
+            return
+        jobs = list(self.svc.pending)
+        if self.svc.timer.isActive() and self.svc.job:
+            jobs.append(self.svc.job)
+        share = share_root(endpoint)
+        if any(
+            share_root(f).equal(share)
+            for job in jobs
+            for f in [job.dest, *job.sources]
+            if server(f)
+        ):
+            self.message(
+                "Let transfers using this share finish before disconnecting it."
+            )
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Forget network login",
+                f"Disconnect this share and forget saved SMB logins for {server(endpoint)} "
+                "in the Linux keyring? Other shares and Linux apps using this server may ask "
+                "for a password next time.",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        if self.load_cancel:
+            self.load_cancel.cancel()
+        cancel = self.load_cancel = Gio.Cancellable()
+        self.loading = False
+        self.message("Disconnecting the share and forgetting its saved login…")
+
+        def finished(error):
+            if self.closed or cancel.is_cancelled():
+                return
+            if error:
+                self.message(f"Could not reset the network login. {error}")
+            else:
+                self.go(target, override=override)
+
+        self.svc.reset_login(endpoint, cancel, finished)
 
     def launch_terminal(self, args):
         if self.closed:
@@ -889,26 +967,34 @@ class Window(QMainWindow):
         if not ok:
             self.message("Could not start ROOT Terminal.")
 
-    def open_terminal(self):
-        folder = self.current
+    def open_terminal(self, admin=False):
+        folder = self.failed_network or self.attempt or self.current
+        home = str(Path.home())
+        unavailable = self.unavailable and self.attempt is None
 
         def working_directory():
-            path = folder.get_path()
-            return path if path and Path(path).is_dir() else None
+            path = folder.get_path() if folder.is_native() and not unavailable else None
+            if not path or not os.path.isdir(path) or not os.access(path, os.X_OK):
+                return home
+            info = folder.query_filesystem_info("filesystem::type", None)
+            if info.get_attribute_string("filesystem::type") in {
+                "cifs",
+                "smb3",
+                "smbfs",
+                "nfs",
+                "nfs4",
+                "fuse.sshfs",
+                "fuse.gvfsd-fuse",
+            }:
+                return home
+            return path
 
-        def opened(path, error):
-            if self.closed:
-                return
-            if path:
-                self.launch_terminal(["folder", path])
-            elif not folder.is_native():
-                self.message(
-                    "Linux has no local working directory for this SMB folder. Open SSH sessions to start a shell on the NAS if it runs SSH."
-                )
-            else:
-                self.message("The terminal working directory is unavailable.")
-
-        self.svc.workers.start(working_directory, opened)
+        self.svc.workers.start(
+            working_directory,
+            lambda path, error: self.launch_terminal(
+                ["admin" if admin else "folder", path or home]
+            ),
+        )
 
     def open_selected_window(self):
         rows = self.table.selected()
@@ -1041,11 +1127,17 @@ class Window(QMainWindow):
             f"{len(rows)} selected for " + ("moving" if move else "copying")
         )
 
+    def sync_cut(self):
+        move, uris = clipboard_files(QApplication.clipboard().mimeData())
+        cut = set(uris) if move else set()
+        if cut != self.table.cut_uris:
+            self.table.cut_uris = cut
+            self.table.viewport().update()
+
     def paste(self):
         mime = QApplication.clipboard().mimeData()
         if not mime:
             return
-        move = False
         if mime.hasFormat(archives.MIME):
             try:
                 self.svc.enqueue_job(
@@ -1054,14 +1146,7 @@ class Window(QMainWindow):
             except (ValueError, TypeError, KeyError) as exc:
                 self.message(str(exc))
             return
-        if mime.hasFormat(COPY_FORMAT):
-            lines = bytes(mime.data(COPY_FORMAT)).decode(errors="replace").splitlines()
-            if not lines or lines[0] not in ("cut", "copy"):
-                return
-            move, uris = lines[0] == "cut", lines[1:]
-        else:
-            move = bytes(mime.data("application/x-kde-cutselection")) == b"1"
-            uris = [bytes(u.toEncoded()).decode() for u in mime.urls()]
+        move, uris = clipboard_files(mime)
         if self.drop(uris, self.current, move) and move:
             QApplication.clipboard().clear()
 
@@ -1120,6 +1205,13 @@ class Window(QMainWindow):
             m.addAction("Paste", self.paste)
             m.addAction("Refresh", self.refresh)
             m.addAction("Copy and move history…", lambda: CopyHistory(self).show())
+            m.addAction("Connection settings…", self.network)
+            target = self.failed_network or self.attempt or self.location
+            if server(target):
+                m.addAction(
+                    "Forget network login and reconnect…",
+                    lambda: self.change_login(target),
+                )
             m.addAction("Access ChromeOS folders…", self.sharing_help)
             t = m.addAction("Show image thumbnails", self.toggle_thumbnails)
             t.setCheckable(True)

@@ -18,7 +18,7 @@ QTreeWidget#directoryTree {background:#131019;border:0;outline:0;}
 QTreeWidget#directoryTree::item {height:26px;padding:1px 3px;border-radius:4px;}
 QTreeWidget#directoryTree::item:selected {background:#3a2b4a;color:#ebdbff;}
 QFrame#breadcrumbs {background:#100e17;border:1px solid #4a4058;border-radius:5px;}
-QPushButton#crumb {background:transparent;color:#decff1;border:1px solid transparent;padding:3px 5px;}
+QPushButton#crumb {background:transparent;color:#decff1;border:1px solid transparent;padding:3px 8px;}
 QPushButton#crumb:hover,QPushButton#crumb:focus {background:#392a48;border:1px solid #72568b;}
 QProgressBar#capacity {background:#352b40;border-radius:3px;}
 QProgressBar#capacity::chunk {background:#92dcc4;border-radius:3px;}

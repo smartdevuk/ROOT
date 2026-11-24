@@ -75,6 +75,9 @@ def run():
         win = TerminalWindow(app)
         tab = win.add_tab(directory)
         spin(lambda: tab.pid, "Local shell did not start: " + tab.message.get_text())
+        assert not win.plus.is_ancestor(tab.header)
+        assert win.tab_actions.get_parent() is win.book.get_parent()
+        assert win.shells.get_visible_child() == tab.content
         command(tab, "pwd > first")
         spin(lambda: (here / "first").exists(), "Shell did not run")
         assert (here / "first").read_text().strip() == directory
@@ -86,6 +89,11 @@ def run():
         win.plus.clicked()
         second = win.active()
         spin(lambda: second.pid, "Second tab did not start")
+        assert tab.header.get_mapped() and second.header.get_mapped()
+        assert win.shells.get_visible_child() == second.content
+        win.book.set_current_page(0)
+        assert win.shells.get_visible_child() == tab.content
+        win.book.set_current_page(1)
         command(second, "pwd > second")
         spin(
             lambda: (sub / "second").exists(),
@@ -194,8 +202,15 @@ def run():
         spin(lambda: other.active().pid, "Separate terminal window failed")
         other.discard(other.active())
         if os.getenv("ROOT_TEST_ADMIN_TAB"):
-            win.new_admin()
+            admin_launch = subprocess.Popen(
+                [sys.executable, str(path), "admin", directory]
+            )
+            spin(
+                lambda: win.active().admin and admin_launch.poll() is not None,
+                "Root terminal request did not open an administrator tab",
+            )
             admin = win.active()
+            assert admin.directory == directory and admin_launch.returncode == 0
             spin(lambda: admin.pid, "sudo did not start")
             proof = here / "admin-id"
             command(admin, "id -u > " + shlex.quote(str(proof)))

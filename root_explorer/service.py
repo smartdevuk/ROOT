@@ -7,6 +7,12 @@ import queue
 import threading
 import time
 from collections import deque
+from urllib.parse import urlsplit
+
+import gi
+
+gi.require_version("Secret", "1")
+from gi.repository import Secret
 
 from gi.repository import Gio, GLib
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal, QSaveFile, QIODevice
@@ -223,6 +229,65 @@ class Service(QObject):
         file.mount_enclosing_volume(Gio.MountMountFlags.NONE, op, cancel, finished)
         self.pump.start()
 
+    def reset_login(self, file, cancel, callback):
+        endpoint = urlsplit(file.get_uri())
+
+        def erase():
+            schema = Secret.get_schema(Secret.SchemaType.COMPAT_NETWORK)
+            attrs = {"protocol": "smb", "server": endpoint.hostname}
+            service = Secret.Service.get_sync(Secret.ServiceFlags.NONE, cancel)
+            items = service.search_sync(schema, attrs, Secret.SearchFlags.ALL, cancel)
+            for item in items:
+                fields = item.get_attributes()
+                if fields.get("port", "0") == str(
+                    endpoint.port or 0
+                ) and not fields.get("object"):
+                    item.delete_sync(cancel)
+
+        def forget():
+            self.workers.start(erase, lambda _, error: callback(error), cancel)
+
+        def lookup():
+            try:
+                return file.find_enclosing_mount(cancel)
+            except GLib.Error as exc:
+                if gio_error(exc, Gio.IOErrorEnum.NOT_MOUNTED) or gio_error(
+                    exc, Gio.IOErrorEnum.NOT_FOUND
+                ):
+                    return None
+                raise
+
+        def found(mount, error):
+            if cancel.is_cancelled():
+                return
+            if error:
+                callback(error)
+            elif mount is None:
+                forget()
+            else:
+                op = Gio.MountOperation()
+                self.mounts[id(op)] = op
+
+                def unmounted(source, result, *_):
+                    self.mounts.pop(id(op), None)
+                    if not self.mounts:
+                        self.pump.stop()
+                    try:
+                        source.unmount_with_operation_finish(result)
+                    except GLib.Error as exc:
+                        if not gio_error(exc, Gio.IOErrorEnum.NOT_MOUNTED):
+                            callback(exc)
+                            return
+                    if not cancel.is_cancelled():
+                        forget()
+
+                mount.unmount_with_operation(
+                    Gio.MountUnmountFlags.NONE, op, cancel, unmounted
+                )
+                self.pump.start()
+
+        self.workers.start(lookup, found, cancel)
+
     def glib_tick(self):
         loop = GLib.MainContext.default()
         for _ in range(12):
@@ -256,6 +321,11 @@ class Service(QObject):
             guest.toggled.connect(
                 lambda b: [edit.setDisabled(b) for edit in (login, group, password)]
             )
+        remember = QCheckBox("Remember this login in the Linux keyring")
+        if flags & opts.SAVING_SUPPORTED:
+            form.addRow(remember)
+            remember.setChecked(True)
+            guest.toggled.connect(remember.setDisabled)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -268,5 +338,8 @@ class Service(QObject):
             op.set_username(login.text())
             op.set_domain(group.text())
             op.set_password(password.text())
-        op.set_password_save(Gio.PasswordSave.NEVER)
+        save = remember.isChecked() and not guest.isChecked()
+        op.set_password_save(
+            Gio.PasswordSave.PERMANENTLY if save else Gio.PasswordSave.NEVER
+        )
         op.reply(Gio.MountOperationResult.HANDLED)

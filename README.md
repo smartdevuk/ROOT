@@ -4,7 +4,7 @@
 
 ROOT is a native file explorer for the Linux environment on a Chromebook. Independent windows share a clipboard and a transfer queue. Its dark violet interface, mint throughput trace and four-row scrolling activity view come from [PORT22](https://github.com/smartdevuk/PORT22).
 
-**[Download ROOT 1.2.0 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.2.0_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
+**[Download ROOT 1.3.0 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.3.0_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
 
 ![ROOT file explorer](docs/explorer.png)
 
@@ -18,7 +18,7 @@ ROOT is a native file explorer for the Linux environment on a Chromebook. Indepe
 
 ~~~sh
 sudo apt update
-sudo apt install ~/root-explorer_1.2.0_all.deb
+sudo apt install ~/root-explorer_1.3.0_all.deb
 ~~~
 
 The Debian package uses the system Python, Qt 5, GVfs SMB, GTK 3, VTE and OpenSSH. Its package name and terminal command are both **root-explorer**. The code is architecture-independent and targets Debian 12 and 13. ROOT runs as your normal Linux user.
@@ -29,18 +29,20 @@ The sidebar starts with Linux files. To browse ChromeOS Downloads, right-click *
 
 ## Browse your NAS
 
-Press **Ctrl+L**, enter a Windows-style location such as `\\fileserver\Shared`, and press Enter. ROOT also accepts **smb://fileserver/Shared**. A sign-in window appears when the server requests credentials. Enter the NAS username and password, or select guest if your share permits it. ROOT keeps passwords out of its settings and path history.
+Press **Ctrl+L**, enter a Windows-style location such as `\\fileserver\Shared`, and press Enter. ROOT also accepts **smb://fileserver/Shared**. A sign-in window appears when the server requests credentials. Enter the NAS username and password, or select guest if your share permits it. Leave **Remember this login in the Linux keyring** ticked to reuse an accepted login, or untick it for this connection. Linux may ask you to create or unlock its keyring. ROOT keeps passwords out of its settings and path history.
+
+To switch accounts, open the share and choose **Folder options (…) → Forget network login and reconnect**. The same action is available in **Connection settings** after a failed connection. ROOT disconnects that share, clears the saved SMB logins for its server in the Linux keyring, and reconnects. Enter the new username and password when prompted. Other shares or Linux apps using that server may ask for their login next time.
 
 Click any folder name in the address bar to jump directly to it. If the path is too long, **…** contains earlier folders. Click the pencil or press **Ctrl+L** to edit the full path. Expand the arrows in the left sidebar to browse one level at a time. Drag the sidebar divider to make long names easier to read.
 
-The address bar puts matching recent folders first. It also suggests folders from the current directory or an accessible share. Use the arrow keys to select a suggestion, **Tab** to complete and keep typing, or **Enter** to open it. Start with `\\fileserver` to list shares if the NAS permits share browsing. When it restricts enumeration, enter the complete share path once. If the name works on Windows but fails in ROOT, choose **Connection settings** in the error banner or **Connect to NAS** in the sidebar. Keep the share address as `\\fileserver\Shared` and enter the NAS’s LAN address in the optional IP field. ROOT can suggest an IP when Linux resolves the local hostname. Verify it against the NAS, router, or the first line of `ping -4 fileserver` on Windows. Once the share opens, ROOT remembers the mapping for that server and keeps the friendly name in breadcrumbs, history and autocomplete. Revisit the same settings if the NAS address changes. UNC paths use SMB. If you already mounted an NFS export in Linux, browse its Linux mount path.
+The address bar puts matching recent folders first. It also suggests folders from the current directory or an accessible share. Use the arrow keys to select a suggestion, **Tab** to complete and keep typing, or **Enter** to open it. Start with `\\fileserver` to list shares if the NAS permits share browsing. When it restricts enumeration, enter the complete share path once. If the name works on Windows but fails in ROOT, choose **Connection settings** in the error banner or **Folder options (…) → Connection settings**. Keep the share address as `\\fileserver\Shared` and enter the NAS’s LAN address in the optional IP field. ROOT can suggest an IP when Linux resolves the local hostname. Verify it against the NAS, router, or the first line of `ping -4 fileserver` on Windows. Once the share opens, ROOT remembers the mapping for that server and keeps the friendly name in breadcrumbs, history and autocomplete. Revisit the same settings if the NAS address changes. UNC paths use SMB. If you already mounted an NFS export in Linux, browse its Linux mount path.
 
 The bottom-left meter follows the current folder and shows free space on its volume. Hover over the bar for used, free and total capacity. Filesystems that omit capacity information display the available figures.
 
 ## Everyday file operations
 
 - **Two windows.** Ctrl+N opens another window at the current location. Right-click a folder and choose **Open folder in new window** to open that folder directly. Each window maintains its own back and forward history.
-- **Copy and move.** Select one or more entries with Ctrl-click or Shift-click. Use Ctrl+C or Ctrl+X in the source window and Ctrl+V in the destination. Dragging copies by default, and holding Shift while dropping in ROOT moves. A drop on a folder targets that folder.
+- **Copy and move.** Select one or more entries with Ctrl-click or Shift-click. Use Ctrl+C or Ctrl+X in the source window and Ctrl+V in the destination. Cut entries appear faded in every ROOT window until you paste or replace the clipboard. Dragging copies by default, and holding Shift while dropping in ROOT moves. A drop on a folder targets that folder.
 - **Inline rename.** Select one entry and press Ctrl+Enter or F2. Type directly over the selected part of the name. ROOT selects `holiday.photo` in `holiday.photo.jpg`, and the whole name for folders and extensionless files. Press Enter to save or Escape to cancel.
 - **Names and conflicts.** When a destination name exists, ROOT keeps both items and adds a suffix such as “(copy)” to the incoming name. A folder collision creates a distinct folder tree. Hidden files and empty folders are included. Local symbolic links are copied as links where supported.
 - **Properties.** Right-click a folder and choose **Properties**, or press Alt+Enter. The calculation runs in the background. The report shows logical bytes, file and folder counts and the size and percentage for every immediate child, including its descendants. If the filesystem exposes allocation sizes, ROOT also reports space allocated to file data, counting local hard-linked data once. Inaccessible locations are flagged. Links inside a folder are never followed during the count. The folder options menu opens Properties for the current location.
@@ -61,9 +63,9 @@ Archive browsing is read-only. Extraction streams regular files, preserves empty
 
 ## Terminal and SSH
 
-Click **Terminal** in a file window to open your usual Linux shell in the folder on screen. Further clicks open another tab in the same terminal window. Click **+** beside the last tab or **Ctrl+Shift+T** to start a local shell in the active local tab’s working directory, including after you use `cd`. Local tabs run inside the Chromebook’s Linux environment. A mounted SMB folder also works when GVfs exposes it as a local path. If it has no local path, ROOT explains this in the file window. A shell running on the NAS itself uses a separate SSH connection and starts in the directory configured by that server.
+Click **Terminal** in a file window to open your usual Linux shell in the folder on screen. Further clicks open another tab in the same terminal window. Click **+** beside the last tab or **Ctrl+Shift+T** to start a local shell in the active local tab’s working directory, including after you use `cd`. Local tabs run inside the Chromebook’s Linux environment. When browsing an SMB share, a mounted NFS share or an unavailable folder, both terminal buttons open in your Linux user’s home directory. A shell running on the NAS itself uses a separate SSH connection and starts in the directory configured by that server.
 
-Use **▾ → New window** or **Ctrl+Shift+N** for a separate terminal window. For several local maintenance commands, choose **▾ → Administrator tab**. This starts `sudo -H -s` using your existing Linux sudo permissions and prompts if required. Commands in this labelled tab run as root until you type `exit` or close it. Open ordinary tabs with **+**.
+Use **▾ → New window** or **Ctrl+Shift+N** for a separate terminal window. For several local maintenance commands, click **Root terminal** in the explorer or choose **▾ → Administrator tab** in the terminal. This starts `sudo -H -s` using your existing Linux sudo permissions and prompts if required. Commands in this labelled tab run as root until you type `exit` or close it. Open ordinary tabs with **+**.
 
 Choose **SSH sessions** from the sidebar or terminal window. Click **New session**, enter a name and host, and optionally choose a username, port or OpenSSH private key. Save it and click **Connect**, or double-click a saved session. You can edit and remove saved sessions, open several servers at once and reconnect an exited SSH tab. OpenSSH reads your Linux SSH config and agent. Host-key verification, passwords and key passphrases use the terminal prompt. ROOT stores the destination and chosen key path in your Linux account. The terminal works with interactive editors, arrow keys and Ctrl+C.
 
@@ -74,7 +76,7 @@ Choose **SSH sessions** from the sidebar or terminal window. Click **New session
 | Ctrl+PageUp / Ctrl+PageDown | Previous / next tab |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy selection / paste |
 
-![ROOT Terminal with a local shell and an SSH tab](docs/terminal.png)
+![ROOT Terminal with a working folder, an Administrator tab and the SmartDevUK watermark](docs/terminal.png)
 
 ![Editing a saved SSH session inside the terminal window](docs/ssh.png)
 
@@ -112,10 +114,10 @@ The screenshots show the native app with temporary sample files. The transfer ca
 ## Build and run from source
 
 ~~~sh
-sudo apt install python3-pyqt5 python3-gi gir1.2-glib-2.0 gvfs-backends gvfs-fuse xdg-utils gir1.2-gtk-3.0 gir1.2-vte-2.91 openssh-client python3-libarchive-c sudo dpkg-dev
+sudo apt install python3-pyqt5 python3-gi python3-gi-cairo gir1.2-secret-1 gnome-keyring gir1.2-glib-2.0 gvfs-backends gvfs-fuse xdg-utils gir1.2-gtk-3.0 gir1.2-vte-2.91 openssh-client python3-libarchive-c sudo dpkg-dev
 /usr/bin/python3 root_explorer/main.py
 ./build.sh
-sudo apt install ./dist/root-explorer_1.2.0_all.deb
+sudo apt install ./dist/root-explorer_1.3.0_all.deb
 ~~~
 
 To open a specific location from Terminal, run either command below.

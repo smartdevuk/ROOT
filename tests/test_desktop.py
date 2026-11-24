@@ -84,6 +84,14 @@ class Desktop(TestCase):
 
     def test_clipboard_copy_cut_paste_graph_history(self):
         b = self.new(self.b)
+        mirror = self.new(self.a)
+        self.select(self.w, "notes.txt")
+        uri = resolve(str(self.a / "notes.txt")).get_uri()
+        self.w.clip(True)
+        self.assertEqual(mirror.table.cut_uris, {uri})
+        QApplication.clipboard().setText("another clipboard owner")
+        self.assertFalse(self.w.table.cut_uris)
+        self.assertFalse(mirror.table.cut_uris)
         self.select(self.w, "notes.txt")
         QTest.keyClick(self.w.table, Qt.Key_C, Qt.ControlModifier)
         b.activateWindow()
@@ -113,6 +121,7 @@ class Desktop(TestCase):
         self.spin(
             lambda: not (self.a / "notes.txt").exists() and not self.s.timer.isActive()
         )
+        self.assertFalse(mirror.table.cut_uris)
         self.assertTrue((self.b / "notes (copy).txt").exists())
         history = CopyHistory(b)
         key = history.list.currentItem().data(0, Qt.UserRole)["id"]
@@ -216,6 +225,7 @@ class Desktop(TestCase):
             for file, btn, _ in self.w.crumbs.items
             if file.get_path() == str(self.a)
         )
+        self.assertEqual(parent_btn.text(), self.a.name)
         QTest.mouseClick(parent_btn, Qt.LeftButton)
         self.spin(
             lambda: self.w.current.get_path() == str(self.a) and not self.w.loading
@@ -229,6 +239,22 @@ class Desktop(TestCase):
             QTest.mouseClick(btn, Qt.LeftButton)
             self.spin(lambda: launcher.called)
             launcher.assert_called_once_with(["folder", str(self.a)])
+            root_button = next(
+                b
+                for b in self.w.findChildren(QPushButton)
+                if b.text() == "Root terminal"
+            )
+            for folder, expected in [
+                (self.w.current, str(self.a)),
+                (resolve("smb://fileserver/Shared"), str(Path.home())),
+                (resolve(str(self.a / "missing")), str(Path.home())),
+            ]:
+                launcher.reset_mock()
+                self.w.attempt = folder
+                QTest.mouseClick(root_button, Qt.LeftButton)
+                self.spin(lambda: launcher.called)
+                launcher.assert_called_once_with(["admin", expected])
+            self.w.attempt = None
         info = Gio.FileInfo()
         info.set_attribute_uint64("filesystem::free", 25)
         info.set_attribute_uint64("filesystem::size", 100)
@@ -285,6 +311,49 @@ class Desktop(TestCase):
             and not self.s.timer.isActive()
         )
         self.w.thumb_toggle.click()
+
+    def test_keyring_choice_respects_guest_and_backend_support(self):
+        from gi.repository import Gio
+        from PyQt5.QtWidgets import QCheckBox
+
+        flags = Gio.AskPasswordFlags
+        for supported, guest, remember, expected in (
+            (True, False, True, Gio.PasswordSave.PERMANENTLY),
+            (True, False, False, Gio.PasswordSave.NEVER),
+            (True, True, True, Gio.PasswordSave.NEVER),
+            (False, False, False, Gio.PasswordSave.NEVER),
+        ):
+            options = (
+                flags.NEED_USERNAME | flags.NEED_PASSWORD | flags.ANONYMOUS_SUPPORTED
+            )
+            if supported:
+                options |= flags.SAVING_SUPPORTED
+            seen = []
+
+            def choose():
+                dlg = self.app.activeModalWidget()
+                checks = {c.text(): c for c in dlg.findChildren(QCheckBox)}
+                store = checks.get("Remember this login in the Linux keyring")
+                seen.append(bool(store and store.isChecked() and store.isVisible()))
+                if store:
+                    store.setChecked(remember)
+                checks["Connect as guest"].setChecked(guest)
+                dlg.accept()
+
+            op = Gio.MountOperation()
+            QTimer.singleShot(0, choose)
+            self.s.credentials(
+                op,
+                self.w,
+                resolve("smb://fileserver/Shared"),
+                "Sign in",
+                "",
+                "",
+                options,
+            )
+            self.assertEqual(seen, [supported])
+            self.assertEqual(op.get_anonymous(), guest)
+            self.assertEqual(op.get_password_save(), expected)
 
     def test_multi_launch_and_network_mount_retry(self):
         host = Instance(self.s, None)

@@ -2,9 +2,11 @@
 """ROOT's tabbed VTE terminal. Local shells and OpenSSH share the same PTY UI."""
 import os
 from pathlib import Path
+from functools import lru_cache
 import pwd
 import sys
 
+import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -22,9 +24,10 @@ button.root-control {background-image:none;background-color:#241e2e;color:#f5f1f
 button.root-control:hover {background-color:#372a44;}
 button.primary {background-color:#c2a6ff;color:#211332;}
 vte-terminal {padding:7px 9px;}
-notebook > header {background:#17121e;border:0;}
+box.tab-strip, notebook > header {background:#17121e;border:0;}
 notebook > header tab {background:#17121e;color:#bbafc7;padding:5px 8px;border:0;}
 notebook > header tab:checked {background:#32273e;color:#e7d8ff;box-shadow:inset 0 -2px #bda0ec;}
+button.tab-action {min-width:20px;min-height:22px;padding:0 5px;}
 button.close-tab {padding:0 3px;border:0;min-width:16px;min-height:14px;background:transparent;}
 entry, treeview, scrolledwindow {background:#15111c;color:#f5f1ff;border-color:#483b54;}
 treeview:selected {background:#49355a;color:#fff;}
@@ -253,6 +256,30 @@ class SessionPicker(Gtk.Stack):
         pane.destroy()
 
 
+@lru_cache(maxsize=1)
+def watermark():
+    return cairo.ImageSurface.create_from_png(
+        str(Path(__file__).with_name("sd-mark.png"))
+    )
+
+
+def paint_background(term, cr):
+    cr.set_source_rgb(16 / 255, 13 / 255, 22 / 255)
+    cr.paint()
+    width, height = term.get_allocated_width(), term.get_allocated_height()
+    art = watermark()
+    scale = min(220, width * 0.42, height * 0.5) / art.get_width()
+    cr.save()
+    cr.translate(
+        width - art.get_width() * scale - 12, height - art.get_height() * scale - 12
+    )
+    cr.scale(scale, scale)
+    cr.set_source_surface(art, 0, 0)
+    cr.paint_with_alpha(0.09)
+    cr.restore()
+    return False
+
+
 class Tab(Gtk.Box):
     def __init__(self, window, directory, session=None, admin=False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -267,6 +294,8 @@ class Tab(Gtk.Box):
         self.term.set_colors(
             tone("#f5f1ff"), tone("#100d16"), [tone(v) for v in PALETTE]
         )
+        self.term.set_clear_background(False)
+        self.term.connect("draw", paint_background)
         self.term.set_color_cursor(tone("#98e1cd"))
         self.term.set_color_highlight(tone("#523866"))
         self.term.set_font(Pango.FontDescription("monospace 11"))
@@ -281,7 +310,8 @@ class Tab(Gtk.Box):
             orientation=Gtk.Orientation.VERTICAL, adjustment=self.term.get_vadjustment()
         )
         area.pack_start(scrollbar, False, False, 0)
-        self.pack_start(area, True, True, 0)
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.content.pack_start(area, True, True, 0)
         self.status = Gtk.Box(spacing=8, margin=5)
         self.status.set_no_show_all(True)
         self.message = label("", "dim")
@@ -292,7 +322,7 @@ class Tab(Gtk.Box):
             False,
             0,
         )
-        self.pack_end(self.status, False, False, 0)
+        self.content.pack_end(self.status, False, False, 0)
         self.term.connect("child-exited", self.exited)
         self.header = Gtk.Box(spacing=5)
         self.tab_name = label(
@@ -317,6 +347,7 @@ class Tab(Gtk.Box):
         if title:
             self.tab_name.set_text(title[:160])
             self.tab_name.set_width_chars(min(22, max(4, len(title))))
+            self.window.book.measure_tabs()
 
     def current_directory(self):
         if self.pid and not self.session:
@@ -403,6 +434,22 @@ class Tab(Gtk.Box):
         self.spawn_cancel.cancel()
 
 
+class TabBook(Gtk.Notebook):
+    all_tabs_width = 0
+
+    def measure_tabs(self):
+        # GTK's scrollable notebook normally requests only one tab and two arrows.
+        # Measure the complete strip with GTK's actual tab theme and font first.
+        self.set_scrollable(False)
+        self.all_tabs_width = Gtk.Notebook.do_get_preferred_width(self)[1] + 6
+        self.set_scrollable(True)
+        self.queue_resize()
+
+    def do_get_preferred_width(self):
+        minimum, natural = Gtk.Notebook.do_get_preferred_width(self)
+        return minimum, max(natural, self.all_tabs_width)
+
+
 class TerminalWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="ROOT Terminal")
@@ -430,15 +477,24 @@ class TerminalWindow(Gtk.ApplicationWindow):
         top.pack_end(self.ssh_button)
         self.pages = Gtk.Stack()
         main.pack_start(self.pages, True, True, 0)
-        self.book = Gtk.Notebook(scrollable=True)
-        self.pages.add_named(self.book, "tabs")
+        self.terminal_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.pages.add_named(self.terminal_page, "tabs")
+        strip = Gtk.Box(spacing=5)
+        strip.get_style_context().add_class("tab-strip")
+        self.terminal_page.pack_start(strip, False, False, 0)
+        # Keep GTK's draggable, scrollable tabs. Their terminal panes fill the stack below.
+        self.book = TabBook(scrollable=True, show_border=False)
+        strip.pack_start(self.book, False, True, 0)
+        self.shells = Gtk.Stack()
+        self.terminal_page.pack_start(self.shells, True, True, 0)
         self.tab_actions = Gtk.Box(spacing=2)
-        self.plus = button("+", self.new_local)
+        self.plus = button("+", self.new_local, "tab-action")
         self.plus.set_tooltip_text("New tab (Ctrl+Shift+T)")
         self.plus.get_accessible().set_name("New tab")
         self.tab_actions.pack_start(self.plus, False, False, 0)
         self.options = Gtk.MenuButton(label="▾")
         self.options.get_style_context().add_class("root-control")
+        self.options.get_style_context().add_class("tab-action")
         self.options.set_tooltip_text("New window and administrator tab")
         self.options.get_accessible().set_name("Terminal options")
         menu = Gtk.Menu()
@@ -452,10 +508,9 @@ class TerminalWindow(Gtk.ApplicationWindow):
         menu.show_all()
         self.options.set_popup(menu)
         self.tab_actions.pack_start(self.options, False, False, 0)
-        self.book.connect_after("page-reordered", lambda *_: self.place_tab_actions())
-        self.book.connect_after(
-            "switch-page", lambda book, page, num: GLib.idle_add(self.focus_tab, page)
-        )
+        self.tab_actions.set_valign(Gtk.Align.CENTER)
+        strip.pack_start(self.tab_actions, False, False, 0)
+        self.book.connect_after("switch-page", self.switch_tab)
         self.connect("key-press-event", self.key)
         self.connect("delete-event", self.closing)
         self.show_all()
@@ -466,16 +521,9 @@ class TerminalWindow(Gtk.ApplicationWindow):
         else:
             self.maximize()
 
-    def place_tab_actions(self):
-        parent = self.tab_actions.get_parent()
-        last = self.book.get_nth_page(self.book.get_n_pages() - 1)
-        if last and parent is last.header:
-            return
-        if parent:
-            parent.remove(self.tab_actions)
-        if last:
-            last.header.pack_end(self.tab_actions, False, False, 3)
-            self.tab_actions.show_all()
+    def switch_tab(self, book, page, num):
+        self.shells.set_visible_child(page.content)
+        GLib.idle_add(self.focus_tab, page)
 
     def new_window(self):
         tab = self.active()
@@ -500,10 +548,12 @@ class TerminalWindow(Gtk.ApplicationWindow):
         if self.picker:
             self.ssh_button.set_sensitive(True)
         tab = Tab(self, directory, session, admin)
+        self.shells.add(tab.content)
+        tab.content.show_all()
         index = self.book.append_page(tab, tab.header)
         self.book.set_tab_reorderable(tab, True)
         tab.show_all()
-        self.place_tab_actions()
+        self.book.measure_tabs()
         self.book.set_current_page(index)
         tab.spawn()
         tab.term.grab_focus()
@@ -531,7 +581,7 @@ class TerminalWindow(Gtk.ApplicationWindow):
     def finish_sessions(self, session=None):
         picker = self.picker
         self.picker = None
-        self.pages.set_visible_child(self.book)
+        self.pages.set_visible_child(self.terminal_page)
         if picker:
             self.pages.remove(picker)
             picker.destroy()
@@ -550,7 +600,8 @@ class TerminalWindow(Gtk.ApplicationWindow):
         pos = self.book.page_num(tab)
         if pos >= 0:
             self.book.remove_page(pos)
-        self.place_tab_actions()
+            self.book.measure_tabs()
+        tab.content.destroy()
         tab.destroy()
         if not self.picker and not self.book.get_n_pages():
             self.destroy()
@@ -641,15 +692,14 @@ class TerminalApp(Gtk.Application):
             if win.picker is None and not win.book.get_n_pages():
                 win.destroy()
         else:
-            folder = (
-                args[1] if len(args) == 2 and args[0] == "folder" else str(Path.home())
+            mode, folder = (
+                args
+                if len(args) == 2 and args[0] in ("folder", "admin")
+                else ("folder", str(Path.home()))
             )
-            if os.path.isdir(folder):
-                win.add_tab(folder)
-            else:
-                notice(win, f"This folder is unavailable. {folder}")
-                if not win.book.get_n_pages():
-                    win.destroy()
+            if not os.path.isdir(folder) or not os.access(folder, os.X_OK):
+                folder = str(Path.home())
+            win.add_tab(folder, admin=mode == "admin")
         return 0
 
 

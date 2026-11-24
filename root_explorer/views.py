@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QMessageBox,
     QPlainTextEdit,
+    QStyledItemDelegate,
     QTableView,
     QTreeWidget,
     QTreeWidgetItem,
@@ -144,11 +145,25 @@ class Filter(QSortFilterProxyModel):
         )
 
 
+class FileDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        table = self.parent()
+        if table.cut_uris and table.entry(index).file.get_uri() in table.cut_uris:
+            painter.save()
+            painter.setOpacity(0.5)
+            super().paint(painter, option, index)
+            painter.restore()
+        else:
+            super().paint(painter, option, index)
+
+
 class FileTable(QTableView):
     dropped = pyqtSignal(object, object, bool)
 
     def __init__(self):
         super().__init__()
+        self.cut_uris = set()
+        self.setItemDelegate(FileDelegate(self))
         self.files = FileModel(self)
         self.proxy = Filter(self.files)
         self.setModel(self.proxy)
