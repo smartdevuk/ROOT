@@ -14,6 +14,7 @@ from PyQt5.QtCore import (
     QMimeData,
     QSize,
     QUrl,
+    QTimer,
     pyqtSignal,
 )
 from PyQt5.QtGui import QPixmap, QDrag, QImageReader
@@ -61,6 +62,52 @@ class FileModel(QAbstractTableModel):
         self.rows = []
         self.thumbnails = None
 
+        self.sizes = None
+        self.size_rows = {}
+        self.waiting = set()
+        self.dots = 0
+        self.animation = QTimer(self)
+        self.animation.setInterval(300)
+        self.animation.timeout.connect(self.animate_sizes)
+
+    def watch_sizes(self, service, rows, refresh=False):
+        if self.sizes is None:
+            self.sizes = service
+            service.changed.connect(self.size_changed)
+        self.size_rows = {row.file.get_uri(): index for index, row in rows}
+        folders = {uri: self.rows[n].file for uri, n in self.size_rows.items()}
+        service.watch(self, folders, refresh)
+
+    def size_changed(self, uri):
+        if uri:
+            if uri not in self.size_rows:
+                return
+            self.waiting.discard(uri)
+            top = bottom = self.index(self.size_rows[uri], 1)
+        else:
+            self.waiting = self.size_rows.keys() - self.sizes.results.keys()
+            top = self.index(0, 1)
+            bottom = self.index(len(self.rows) - 1, 1)
+        if self.waiting and not self.animation.isActive():
+            self.animation.start()
+        elif not self.waiting:
+            self.animation.stop()
+        if top.isValid() and bottom.isValid():
+            self.dataChanged.emit(top, bottom, [Qt.DisplayRole, Qt.ToolTipRole])
+
+    def animate_sizes(self):
+        self.dots = (self.dots + 1) % 3
+        table = self.parent()
+        table.viewport().update(
+            table.columnViewportPosition(1),
+            0,
+            table.columnWidth(1),
+            table.viewport().height(),
+        )
+
+    def folder_value(self, row):
+        return self.sizes.results.get(row.file.get_uri()) if self.size_rows else None
+
     def replace(self, rows):
         if self.thumbnails:
             self.thumbnails.reset()
@@ -89,7 +136,17 @@ class FileModel(QAbstractTableModel):
             if col == 0:
                 return row.name
             if col == 1:
-                return "—" if row.directory else fmt(row.size)
+                if not row.directory:
+                    return fmt(row.size)
+                uri = row.file.get_uri()
+                if uri not in self.size_rows:
+                    return "—"
+                if uri in self.waiting:
+                    return "·" * (self.dots + 1)
+                size, detail = self.sizes.results.get(uri, (None, ""))
+                if size is None:
+                    return "Unavailable"
+                return ("≥ " if detail else "") + fmt(size)
             if col == 2:
                 return row.kind
             return timestamp(row.modified)
@@ -99,6 +156,16 @@ class FileModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole and col == 1:
             return int(Qt.AlignVCenter | Qt.AlignRight)
         if role == Qt.ToolTipRole:
+            if col == 1 and row.directory and row.file.get_uri() in self.size_rows:
+                result = self.folder_value(row)
+                if result is None:
+                    return "Waiting for the recursive folder size…"
+                size, detail = result
+                if size is None:
+                    return detail
+                if detail:
+                    return "Partial total. Some contents could not be read."
+                return f"{size:,} bytes including subfolders"
             return display(row.file)
 
     def flags(self, index):
@@ -138,6 +205,19 @@ class Filter(QSortFilterProxyModel):
         col = a.column()
         if col == 0:
             return left.name.casefold() < right.name.casefold()
+        if col == 1 and left.directory:
+
+            def key(row):
+                value = self.sourceModel().folder_value(row)
+                size = value[0] if value else None
+                unknown = size is None
+                return (
+                    unknown if self.sortOrder() == Qt.AscendingOrder else not unknown,
+                    size or 0,
+                    row.name.casefold(),
+                )
+
+            return key(left) < key(right)
         attr = ("name", "size", "kind", "modified")[col]
         return (getattr(left, attr), left.name.casefold()) < (
             getattr(right, attr),

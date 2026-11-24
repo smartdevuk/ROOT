@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 from functools import lru_cache
 import pwd
+import re
 import sys
 
-import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -14,6 +14,13 @@ gi.require_version("Vte", "2.91")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte
 from ssh_sessions import Sessions, profile, ssh_command
+
+try:
+    import cairo
+
+    gi.require_foreign("cairo")
+except (ImportError, ValueError):
+    cairo = None
 
 CSS = b"""
 window.root-terminal, .root-body, notebook, notebook > stack {background:#100d16;color:#f5f1ff;}
@@ -258,9 +265,14 @@ class SessionPicker(Gtk.Stack):
 
 @lru_cache(maxsize=1)
 def watermark():
-    return cairo.ImageSurface.create_from_png(
-        str(Path(__file__).with_name("sd-mark.png"))
-    )
+    if cairo is not None:
+        try:
+            return cairo.ImageSurface.create_from_png(
+                str(Path(__file__).with_name("sd-mark.png"))
+            )
+        except (OSError, cairo.Error):
+            pass
+    return None
 
 
 def paint_background(term, cr):
@@ -294,8 +306,9 @@ class Tab(Gtk.Box):
         self.term.set_colors(
             tone("#f5f1ff"), tone("#100d16"), [tone(v) for v in PALETTE]
         )
-        self.term.set_clear_background(False)
-        self.term.connect("draw", paint_background)
+        if hasattr(self.term, "set_clear_background") and watermark() is not None:
+            self.term.set_clear_background(False)
+            self.term.connect("draw", paint_background)
         self.term.set_color_cursor(tone("#98e1cd"))
         self.term.set_color_highlight(tone("#523866"))
         self.term.set_font(Pango.FontDescription("monospace 11"))
@@ -414,7 +427,17 @@ class Tab(Gtk.Box):
         if self.closed:
             return
         if error:
-            self.report(error.message)
+            if self.directory != str(Path.home()) and (
+                error.matches(GLib.spawn_error_quark(), GLib.SpawnError.CHDIR)
+                or not os.path.isdir(self.directory)
+                or not os.access(self.directory, os.X_OK)
+            ):
+                self.directory = str(Path.home())
+                if not self.admin and not self.session:
+                    self.tab_name.set_text(Path.home().name)
+                self.spawn()
+            else:
+                self.report(error.message)
         else:
             self.pid = pid
 
@@ -664,6 +687,40 @@ class TerminalWindow(Gtk.ApplicationWindow):
         return False
 
 
+def launch_directory(path):
+    # Read the kernel mount table without issuing a stat request to an offline NAS.
+    if not os.path.isabs(path):
+        return str(Path.home())
+    target = os.path.normpath(path)
+    deepest, kind = 0, ""
+    try:
+        with open(
+            "/proc/self/mountinfo", encoding="utf-8", errors="surrogateescape"
+        ) as mounts:
+            for line in mounts:
+                fields, _, fs = line.partition(" - ")
+                mount = re.sub(
+                    r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields.split()[4]
+                )
+                if len(mount) >= deepest and (
+                    mount == target or target.startswith(mount.rstrip("/") + "/")
+                ):
+                    deepest, kind = len(mount), fs.split()[0]
+    except OSError:
+        pass
+    if kind in {
+        "cifs",
+        "smb3",
+        "smbfs",
+        "nfs",
+        "nfs4",
+        "fuse.sshfs",
+        "fuse.gvfsd-fuse",
+    }:
+        return str(Path.home())
+    return target
+
+
 class TerminalApp(Gtk.Application):
     def __init__(self):
         super().__init__(
@@ -685,21 +742,37 @@ class TerminalApp(Gtk.Application):
 
     def do_command_line(self, line):
         args = line.get_arguments()[1:]
-        win = self.get_active_window() or TerminalWindow(self)
-        win.present()
-        if args == ["sessions"]:
-            win.sessions()
-            if win.picker is None and not win.book.get_n_pages():
+        win = self.get_active_window()
+        launched = args[-1:] == ["--from-explorer"]
+        if launched:
+            args.pop()
+        try:
+            win = win or TerminalWindow(self)
+            if args == ["sessions"]:
+                win.sessions()
+                if win.picker is None and not win.book.get_n_pages():
+                    win.destroy()
+                    return 1
+            else:
+                mode, folder = (
+                    args
+                    if len(args) == 2 and args[0] in ("folder", "admin")
+                    else ("folder", str(Path.home()))
+                )
+                win.add_tab(launch_directory(folder), admin=mode == "admin")
+            win.deiconify()
+            win.present()
+            if launched and not line.get_is_remote():
+                print("ROOT_WINDOW_READY", flush=True)
+        except Exception as exc:
+            reason = f"Terminal startup failed. {exc}\n"
+            if hasattr(line, "printerr_literal"):
+                line.printerr_literal(reason)
+            else:
+                print(reason, file=sys.stderr, flush=True)
+            if win and not win.book.get_n_pages():
                 win.destroy()
-        else:
-            mode, folder = (
-                args
-                if len(args) == 2 and args[0] in ("folder", "admin")
-                else ("folder", str(Path.home()))
-            )
-            if not os.path.isdir(folder) or not os.access(folder, os.X_OK):
-                folder = str(Path.home())
-            win.add_tab(folder, admin=mode == "admin")
+            return 1
         return 0
 
 

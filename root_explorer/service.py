@@ -15,6 +15,7 @@ gi.require_version("Secret", "1")
 from gi.repository import Secret
 
 from gi.repository import Gio, GLib
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal, QSaveFile, QIODevice
 from PyQt5.QtWidgets import (
     QApplication,
@@ -25,6 +26,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 from files import display, gio_error, server, translate_server
+from folder_sizes import FolderSizes
 from theme import label
 from telemetry import Throughput
 from transfers import Job
@@ -37,6 +39,10 @@ class Workers(QObject):
         super().__init__()
         self.returned.connect(lambda f: f(), Qt.QueuedConnection)
         self.tasks = queue.Queue()
+        self.stopping = threading.Event()
+        app = QApplication.instance()
+        if app:
+            app.aboutToQuit.connect(self.stopping.set)
         for _ in range(6):
             threading.Thread(target=self.work, daemon=True, name="root-browser").start()
 
@@ -49,7 +55,14 @@ class Workers(QObject):
                 result, error = fn(), None
             except Exception as exc:
                 result, error = None, exc
-            self.returned.emit(lambda r=result, e=error, d=done: d(r, e))
+            if self.stopping.is_set():
+                return
+            try:
+                self.returned.emit(lambda r=result, e=error, d=done: d(r, e))
+            except RuntimeError:
+                if sip.isdeleted(self):
+                    return
+                raise
 
     def start(self, fn, done, cancel=None):
         self.tasks.put((fn, done, cancel))
@@ -78,6 +91,7 @@ class State:
                 hidden=False,
                 nas_addresses={},
                 thumbnails=False,
+                folder_sizes=False,
             ).items()
         }
 
@@ -99,6 +113,7 @@ class Service(QObject):
     def __init__(self):
         super().__init__()
         self.workers = Workers()
+        self.folder_sizes = FolderSizes(self.workers)
         self.store = State()
         self.windows = []
         self.pending = deque()

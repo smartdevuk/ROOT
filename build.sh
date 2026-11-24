@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-version=1.3.0
+version=1.4.0
 stage=$(mktemp -d)
 chmod 0755 "$stage"
 trap 'rm -rf "$stage"' EXIT

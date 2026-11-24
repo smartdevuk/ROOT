@@ -312,6 +312,89 @@ class Desktop(TestCase):
         )
         self.w.thumb_toggle.click()
 
+    def test_folder_sizes_toggle_sort_refresh_and_links(self):
+        parent = self.a / "Episodes"
+        (parent / ".hidden").write_bytes(b"h" * 200)
+        sub = parent / "Season 01"
+        sub.mkdir()
+        (sub / "clip").write_bytes(b"x" * 1000)
+        (sub / "loop").symlink_to(parent, target_is_directory=True)
+        (self.a / "Empty").mkdir()
+        (self.a / "Link").symlink_to(parent, target_is_directory=True)
+        self.w.refresh()
+        self.spin(lambda: not self.w.loading)
+
+        def value(name):
+            proxy = self.w.table.proxy
+            for i in range(proxy.rowCount()):
+                if proxy.index(i, 0).data() == name:
+                    return proxy.index(i, 1).data()
+
+        # Keep the menu alive while activating its QAction.
+        menu = self.w.menu()
+        action = next(a for a in menu.actions() if a.text() == "Show folder sizes")
+        self.assertFalse(action.isChecked())
+        self.assertEqual(value("Episodes"), "—")
+        action.trigger()
+        self.assertIn(value("Episodes"), ("·", "··", "···"))
+        self.spin(lambda: not self.w.table.files.waiting)
+        self.assertEqual(value("Episodes"), "1.2 KiB")
+        self.assertEqual(value("Empty"), "0 B")
+        self.assertEqual(value("Link"), "—")
+        self.assertTrue(State().data["folder_sizes"])
+        self.w.table.sortByColumn(1, Qt.DescendingOrder)
+        self.assertEqual(self.w.table.proxy.index(0, 0).data(), "Episodes")
+        (sub / "clip").write_bytes(b"x" * 1800)
+        self.w.refresh()
+        self.spin(lambda: not self.w.loading and value("Episodes") == "2.0 KiB")
+        action.trigger()
+        self.assertEqual(value("Episodes"), "—")
+        self.assertFalse(self.w.table.files.animation.isActive())
+        self.assertFalse(State().data["folder_sizes"])
+
+    def test_folder_size_scans_are_shared_and_cancelled_before_replacement(self):
+        import threading
+
+        other = self.new(self.a)
+        started, stopped = threading.Event(), threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def scan(file, cancel):
+            calls.append(file.get_basename())
+            if file.get_basename() == "Episodes":
+                started.set()
+                release.wait(4)
+                if cancel.is_cancelled():
+                    stopped.set()
+                cancel.set_error_if_cancelled()
+            return (37, "")
+
+        try:
+            with patch("folder_sizes.folder_size", side_effect=scan):
+                self.w.toggle_folder_sizes(True)
+                self.spin(started.is_set)
+                self.w.go(resolve(str(self.b)))
+                self.spin(lambda: not self.w.loading)
+                self.assertFalse(self.s.folder_sizes.active[1].is_cancelled())
+                (self.b / "Next").mkdir()
+                other.go(resolve(str(self.b)))
+                self.w.refresh()
+                self.spin(lambda: not other.loading and not self.w.loading)
+                self.assertTrue(self.s.folder_sizes.active[1].is_cancelled())
+                QTest.qWait(350)
+                self.assertEqual(calls, ["Episodes"])
+                release.set()
+                self.spin(lambda: stopped.is_set() and not other.table.files.waiting)
+                self.assertEqual(calls, ["Episodes", "Next"])
+                self.assertNotIn(
+                    resolve(str(self.a / "Episodes")).get_uri(),
+                    self.s.folder_sizes.results,
+                )
+        finally:
+            release.set()
+            self.w.toggle_folder_sizes(False)
+
     def test_keyring_choice_respects_guest_and_backend_support(self):
         from gi.repository import Gio
         from PyQt5.QtWidgets import QCheckBox

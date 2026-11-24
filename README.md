@@ -4,7 +4,7 @@
 
 ROOT is a native file explorer for the Linux environment on a Chromebook. Independent windows share a clipboard and a transfer queue. Its dark violet interface, mint throughput trace and four-row scrolling activity view come from [PORT22](https://github.com/smartdevuk/PORT22).
 
-**[Download ROOT 1.3.0 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.3.0_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
+**[Download ROOT 1.4.0 for Chromebook / Debian](https://github.com/smartdevuk/ROOT/raw/refs/heads/main/packages/root-explorer_1.4.0_all.deb)** · [Install and pin ROOT](#install-on-a-chromebook) · [Archive browsing](#images-and-archives)
 
 ![ROOT file explorer](docs/explorer.png)
 
@@ -18,7 +18,7 @@ ROOT is a native file explorer for the Linux environment on a Chromebook. Indepe
 
 ~~~sh
 sudo apt update
-sudo apt install ~/root-explorer_1.3.0_all.deb
+sudo apt install ~/root-explorer_1.4.0_all.deb
 ~~~
 
 The Debian package uses the system Python, Qt 5, GVfs SMB, GTK 3, VTE and OpenSSH. Its package name and terminal command are both **root-explorer**. The code is architecture-independent and targets Debian 12 and 13. ROOT runs as your normal Linux user.
@@ -45,6 +45,7 @@ The bottom-left meter follows the current folder and shows free space on its vol
 - **Copy and move.** Select one or more entries with Ctrl-click or Shift-click. Use Ctrl+C or Ctrl+X in the source window and Ctrl+V in the destination. Cut entries appear faded in every ROOT window until you paste or replace the clipboard. Dragging copies by default, and holding Shift while dropping in ROOT moves. A drop on a folder targets that folder.
 - **Inline rename.** Select one entry and press Ctrl+Enter or F2. Type directly over the selected part of the name. ROOT selects `holiday.photo` in `holiday.photo.jpg`, and the whole name for folders and extensionless files. Press Enter to save or Escape to cancel.
 - **Names and conflicts.** When a destination name exists, ROOT keeps both items and adds a suffix such as “(copy)” to the incoming name. A folder collision creates a distinct folder tree. Hidden files and empty folders are included. Local symbolic links are copied as links where supported.
+- **Folder sizes.** Open **Folder options (…) → Show folder sizes** to see the total size of each folder’s files and subfolders in the Size column. The setting starts off and is remembered across windows. Moving dots indicate a pending calculation. A **≥** marks a partial total if some contents could not be read. Hidden files count, symbolic links are skipped, and clicking **Size** sorts numerically. ROOT runs one size calculation at a time across windows, drops work for folders you leave, and recalculates on refresh (Ctrl+R). These are logical file bytes, which can differ from allocated disk space. [See folder sizes on an SMB share](docs/folder-sizes.png).
 - **Properties.** Right-click a folder and choose **Properties**, or press Alt+Enter. The calculation runs in the background. The report shows logical bytes, file and folder counts and the size and percentage for every immediate child, including its descendants. If the filesystem exposes allocation sizes, ROOT also reports space allocated to file data, counting local hard-linked data once. Inaccessible locations are flagged. Links inside a folder are never followed during the count. The folder options menu opens Properties for the current location.
 - **Sort and filter.** Click a column header to sort, or press Ctrl+F to filter the current listing by name. Folders stay grouped. Space previews common images and the beginning of a text file. Enter opens a file in its associated app.
 - **Trash.** Delete asks to move the selection to the desktop Trash. If a filesystem or NAS does not offer Trash, ROOT reports that and leaves the entry in place.
@@ -117,7 +118,7 @@ The screenshots show the native app with temporary sample files. The transfer ca
 sudo apt install python3-pyqt5 python3-gi python3-gi-cairo gir1.2-secret-1 gnome-keyring gir1.2-glib-2.0 gvfs-backends gvfs-fuse xdg-utils gir1.2-gtk-3.0 gir1.2-vte-2.91 openssh-client python3-libarchive-c sudo dpkg-dev
 /usr/bin/python3 root_explorer/main.py
 ./build.sh
-sudo apt install ./dist/root-explorer_1.3.0_all.deb
+sudo apt install ./dist/root-explorer_1.4.0_all.deb
 ~~~
 
 To open a specific location from Terminal, run either command below.

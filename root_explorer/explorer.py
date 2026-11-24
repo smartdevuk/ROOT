@@ -1,6 +1,9 @@
 """Native multi-window file browser for ChromeOS Linux."""
 
 import os
+import subprocess
+import tempfile
+import threading
 from pathlib import Path
 
 from gi.repository import Gio
@@ -8,7 +11,6 @@ from PyQt5.QtCore import (
     Qt,
     QEvent,
     QTimer,
-    QProcess,
     QMimeData,
     QUrl,
     QFileSystemWatcher,
@@ -544,7 +546,7 @@ class Window(QMainWindow):
             return self.message(str(exc))
         self.go(file)
 
-    def go(self, location, pos=None, refresh=False, override=None):
+    def go(self, location, pos=None, refresh=False, override=None, recount=False):
         if self.closed:
             return
         file = self.current if refresh else self.svc.endpoint(location, override)
@@ -555,6 +557,7 @@ class Window(QMainWindow):
         self.loading = True
         self.attempt = location
         if not refresh:
+            self.table.files.watch_sizes(self.svc.folder_sizes, [])
             self.failed_network = None
             self.suggested_ip = None
             self.fix_network.hide()
@@ -627,6 +630,7 @@ class Window(QMainWindow):
                     self.pathbar.setCurrentWidget(self.crumbs)
                 self.hint_cache.clear()
                 self.table.files.replace(rows)
+                self.request_sizes(recount)
                 if refresh and selected:
                     for i, row in enumerate(rows):
                         if row.file.get_uri() in selected:
@@ -753,14 +757,14 @@ class Window(QMainWindow):
             self.deferred_refresh = True
             return
         if not self.closed and not self.loading and not self.address.hasFocus():
-            self.go(self.location, refresh=True)
+            self.go(self.location, refresh=True, recount=True)
 
     def refresh(self):
         if self.failed_network:
             self.go(self.failed_network)
             return
         self.sidebar()
-        self.go(self.location, refresh=True)
+        self.go(self.location, refresh=True, recount=True)
 
     def travel(self, delta):
         pos = self.history_pos + delta
@@ -777,6 +781,7 @@ class Window(QMainWindow):
             return
         self.table.proxy.needle = text.casefold()
         self.table.proxy.invalidateFilter()
+        self.request_sizes()
         self.status()
 
     def focus_filter(self):
@@ -798,6 +803,28 @@ class Window(QMainWindow):
         store.save()
         self.svc.changed.emit()
 
+    def request_sizes(self, recount=False):
+        model = self.table.files
+        rows = []
+        if self.svc.store.data["folder_sizes"] and not self.loading and not self.closed:
+            proxy = self.table.proxy
+            rows = [
+                (i, row)
+                for i, row in enumerate(model.rows)
+                if row.directory
+                and row.kind == "Folder"
+                and row.target.equal(row.file)
+                and (proxy.hidden or not row.hidden)
+                and proxy.needle in row.name.casefold()
+            ]
+        model.watch_sizes(self.svc.folder_sizes, rows, recount)
+
+    def toggle_folder_sizes(self, enabled):
+        self.svc.store.data["folder_sizes"] = enabled
+        self.svc.store.save()
+        for window in self.svc.windows:
+            window.request_sizes()
+
     def toggle_hidden(self):
         data = self.svc.store.data
         data["hidden"] = not data["hidden"]
@@ -805,6 +832,7 @@ class Window(QMainWindow):
         for w in self.svc.windows:
             w.table.proxy.hidden = data["hidden"]
             w.table.proxy.invalidateFilter()
+            w.request_sizes()
             w.status()
 
     def status(self, *_):
@@ -963,38 +991,80 @@ class Window(QMainWindow):
         if self.closed:
             return
         executable = str(Path(__file__).with_name("terminal_app.py"))
-        ok = QProcess.startDetached("/usr/bin/python3", [executable, *args])
-        if not ok:
-            self.message("Could not start ROOT Terminal.")
+        env = os.environ.copy()
+        backend = env.get("GDK_BACKEND")
+        if backend == "wayland" and env.get("DISPLAY"):
+            env["GDK_BACKEND"] = "wayland,x11"
+        elif backend == "x11" and env.get("WAYLAND_DISPLAY"):
+            env["GDK_BACKEND"] = "x11,wayland"
+        elif not backend and QApplication.platformName() == "xcb" and env.get("DISPLAY"):
+            env["GDK_BACKEND"] = "x11,wayland"
+        opening = "Opening ROOT Terminal…"
+        self.message(opening)
+        try:
+            log = tempfile.TemporaryFile()
+            try:
+                process = subprocess.Popen(
+                    ["/usr/bin/python3", executable, *args, "--from-explorer"],
+                    cwd="/",
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=True,
+                )
+            except OSError:
+                log.close()
+                raise
+        except OSError as exc:
+            self.message(f"Could not start ROOT Terminal. {exc}")
+            return
+
+        # The shell must outlive its explorer window. A detached Python process can
+        # start successfully and then fail while importing GTK or opening the display.
+        timer = QTimer(self.svc)
+        timer.setInterval(100)
+
+        def check():
+            status = process.poll()
+            end = os.fstat(log.fileno()).st_size
+            output = os.pread(log.fileno(), 8192, max(0, end - 8192)).decode(
+                errors="replace"
+            )
+            ready = "ROOT_WINDOW_READY" in output.splitlines()
+            if not ready and status is None:
+                return
+            log.close()
+            timer.stop()
+            timer.deleteLater()
+            if status is None:
+                threading.Thread(target=process.wait, daemon=True).start()
+            if self.closed:
+                return
+            if status not in (None, 0):
+                reason = next(
+                    (s.strip() for s in reversed(output.splitlines()) if s.strip()),
+                    f"exit status {status}",
+                )
+                self.message("Could not open ROOT Terminal. " + reason)
+            elif self.notice.text() == opening:
+                self.notice.hide()
+
+        timer.timeout.connect(check)
+        timer.start()
 
     def open_terminal(self, admin=False):
         folder = self.failed_network or self.attempt or self.current
-        home = str(Path.home())
-        unavailable = self.unavailable and self.attempt is None
-
-        def working_directory():
-            path = folder.get_path() if folder.is_native() and not unavailable else None
-            if not path or not os.path.isdir(path) or not os.access(path, os.X_OK):
-                return home
-            info = folder.query_filesystem_info("filesystem::type", None)
-            if info.get_attribute_string("filesystem::type") in {
-                "cifs",
-                "smb3",
-                "smbfs",
-                "nfs",
-                "nfs4",
-                "fuse.sshfs",
-                "fuse.gvfsd-fuse",
-            }:
-                return home
-            return path
-
-        self.svc.workers.start(
-            working_directory,
-            lambda path, error: self.launch_terminal(
-                ["admin" if admin else "folder", path or home]
-            ),
+        path = (
+            folder.get_path()
+            if (
+                not self.unavailable
+                and folder.is_native()
+                and folder.equal(self.current)
+            )
+            else None
         )
+        self.launch_terminal(["admin" if admin else "folder", path or str(Path.home())])
 
     def open_selected_window(self):
         rows = self.table.selected()
@@ -1216,6 +1286,10 @@ class Window(QMainWindow):
             t = m.addAction("Show image thumbnails", self.toggle_thumbnails)
             t.setCheckable(True)
             t.setChecked(self.svc.store.data["thumbnails"])
+            sizes = m.addAction("Show folder sizes")
+            sizes.setCheckable(True)
+            sizes.setChecked(self.svc.store.data["folder_sizes"])
+            sizes.toggled.connect(self.toggle_folder_sizes)
             h = m.addAction("Show hidden files", self.toggle_hidden)
             h.setCheckable(True)
             h.setChecked(self.table.proxy.hidden)
@@ -1288,6 +1362,7 @@ class Window(QMainWindow):
             event.ignore()
             return
         self.closed = True
+        self.request_sizes()
         if self.load_cancel:
             self.load_cancel.cancel()
         self.hide_hints()
